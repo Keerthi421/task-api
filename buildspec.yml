@@ -1,0 +1,19 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - pip install aws-sam-cli --quiet --upgrade
+  pre_build:
+    commands:
+      - sam validate --template app/template.yaml --lint
+  build:
+    commands:
+      - sam build --template app/template.yaml --build-dir .aws-sam/build
+      - sam package --template-file .aws-sam/build/template.yaml --output-template-file packaged-template.yaml --s3-bucket $ARTIFACT_BUCKET --s3-prefix $APPLICATION_NAME/sam-packages/$CODEBUILD_BUILD_NUMBER
+artifacts:
+  files:
+    - packaged-template.yaml
+    - config-staging.json
+    - config-prod.json

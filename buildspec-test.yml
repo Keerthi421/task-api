@@ -1,0 +1,17 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - pip install pytest pytest-cov coverage boto3 --quiet --upgrade
+  build:
+    commands:
+      - python -m pytest app/tests/ --cov=app/src --cov-report=xml:coverage.xml --cov-fail-under=80 --junitxml=test-report.xml -v
+reports:
+  test-report:
+    files: [test-report.xml]
+    file-format: JUNITXML
+  coverage-report:
+    files: [coverage.xml]
+    file-format: COBERTURAXML

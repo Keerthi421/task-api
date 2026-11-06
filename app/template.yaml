@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Task Manager API - Lambda + API Gateway + DynamoDB
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Default: task-api
+  Environment:
+    Type: String
+    AllowedValues: [staging, prod]
+    Default: staging
+
+Globals:
+  Function:
+    Runtime: python3.11
+    MemorySize: 128
+    Timeout: 10
+    Environment:
+      Variables:
+        TASKS_TABLE: !Ref TasksTable
+        ENVIRONMENT: !Ref Environment
+        APPLICATION_NAME: !Ref ApplicationName
+
+Resources:
+
+  TasksTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${ApplicationName}-tasks-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: task_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: task_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserIdIndex
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ApplicationName
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ApplicationName}-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBTasksAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt TasksTable.Arn
+                  - !Sub '${TasksTable.Arn}/index/*'
+
+  TasksApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${ApplicationName}-api-${Environment}'
+      StageName: !Ref Environment
+      Description: !Sub 'Task Manager REST API (${Environment})'
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Requested-With'"
+        AllowOrigin: "'*'"
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          MetricsEnabled: true
+          DataTraceEnabled: !If [IsProd, false, true]
+          LoggingLevel: !If [IsProd, ERROR, INFO]
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ApplicationName}-health-${Environment}'
+      CodeUri: src/
+      Handler: health.handler
+      Role: !GetAtt LambdaRole.Arn
+      Description: 'Liveness probe - returns service status'
+      Events:
+        HealthGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /health
+            Method: GET
+
+  TasksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ApplicationName}-tasks-${Environment}'
+      CodeUri: src/
+      Handler: tasks.handler
+      Role: !GetAtt LambdaRole.Arn
+      Description: !Sub 'Task Manager CRUD API (${Environment})'
+      ReservedConcurrentExecutions: !If [IsProd, 50, 10]
+      Events:
+        ListTasks:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /tasks
+            Method: GET
+        CreateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /tasks
+            Method: POST
+        GetTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /tasks/{task_id}
+            Method: GET
+        UpdateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /tasks/{task_id}
+            Method: PUT
+        DeleteTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TasksApi
+            Path: /tasks/{task_id}
+            Method: DELETE
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Outputs:
+  ApiUrl:
+    Description: 'Base URL for the API'
+    Value: !Sub 'https://${TasksApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-api-url'
+
+  TasksTableName:
+    Description: 'DynamoDB table name'
+    Value: !Ref TasksTable
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-table-name'
+
+  TasksFunctionArn:
+    Description: 'Tasks Lambda Function ARN'
+    Value: !GetAtt TasksFunction.Arn
+
+  HealthEndpoint:
+    Description: 'Health check endpoint'
+    Value: !Sub 'https://${TasksApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/health'
