@@ -7,7 +7,7 @@ Parameters:
   ApplicationName:
     Type: String
     Default: task-api
-  Environment:h
+  Environment:
     Type: String
     AllowedValues: [staging, prod]
     Default: staging
