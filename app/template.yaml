@@ -7,7 +7,7 @@ Parameters:
   ApplicationName:
     Type: String
     Default: task-api
-  Environment:
+  Environment:h
     Type: String
     AllowedValues: [staging, prod]
     Default: staging
@@ -133,7 +133,6 @@ Resources:
       Handler: tasks.handler
       Role: !GetAtt LambdaRole.Arn
       Description: !Sub 'Task Manager CRUD API (${Environment})'
-      ReservedConcurrentExecutions: !If [IsProd, 50, 10]
       Events:
         ListTasks:
           Type: Api
